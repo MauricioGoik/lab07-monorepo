@@ -1,0 +1,145 @@
+name: Monorepo CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - 'feature/**'
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - 'infra/**'
+      - 'docs/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - 'infra/**'
+      - 'docs/**'
+      - '.github/workflows/**'
+
+permissions: read-all
+
+jobs:
+  detect-changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      infra: ${{ steps.filter.outputs.infra }}
+      docs_only: ${{ steps.docs_only.outputs.docs_only }}
+      affected: ${{ steps.affected.outputs.affected }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+            infra:
+              - 'infra/**'
+            docs:
+              - 'docs/**'
+
+      - name: Detect docs only
+        id: docs_only
+        run: |
+          if [[ "${{ steps.filter.outputs.frontend }}" == "false" && \
+                "${{ steps.filter.outputs.backend }}" == "false" && \
+                "${{ steps.filter.outputs.infra }}" == "false" ]]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build affected list
+        id: affected
+        run: |
+          affected=""
+          [[ "${{ steps.filter.outputs.frontend }}" == "true" ]] && affected="${affected} frontend"
+          [[ "${{ steps.filter.outputs.backend }}" == "true" ]] && affected="${affected} backend"
+          [[ "${{ steps.filter.outputs.infra }}" == "true" ]] && affected="${affected} infra"
+          [[ -z "$affected" && "${{ steps.docs_only.outputs.docs_only }}" == "true" ]] && affected="docs"
+          echo "affected=${affected}" >> "$GITHUB_OUTPUT"
+
+  frontend:
+    name: Frontend pipeline
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/reusable-component.yml
+    with:
+      component: frontend
+      working-directory: ./frontend
+      command: |
+        echo "lint frontend"
+        echo "test frontend"
+
+  backend:
+    name: Backend pipeline
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    uses: ./.github/workflows/reusable-component.yml
+    with:
+      component: backend
+      working-directory: ./backend
+      command: |
+        echo "lint backend"
+        echo "test backend"
+
+  infra:
+    name: Infra pipeline
+    needs: detect-changes
+    if: needs.detect-changes.outputs.infra == 'true'
+    uses: ./.github/workflows/reusable-component.yml
+    with:
+      component: infra
+      working-directory: ./infra
+      command: |
+        echo "terraform fmt -check"
+        echo "terraform validate"
+
+  docs-report:
+    name: Docs only report
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Docs notice
+        run: echo "Documentation-only change detected"
+
+  summary:
+    name: Final summary
+    needs: [detect-changes, frontend, backend, infra, docs-report]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate report
+        run: |
+          echo "## Monorepo report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Affected components: ${{ needs.detect-changes.outputs.affected }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frontend pipeline executed: ${{ needs.detect-changes.outputs.frontend }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend pipeline executed: ${{ needs.detect-changes.outputs.backend }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Infra pipeline executed: ${{ needs.detect-changes.outputs.infra }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Docs only change: ${{ needs.detect-changes.outputs.docs_only }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Omitted jobs" >> "$GITHUB_STEP_SUMMARY"
+          [[ "${{ needs.detect-changes.outputs.frontend }}" != "true" ]] && echo "- Frontend omitted" >> "$GITHUB_STEP_SUMMARY"
+          [[ "${{ needs.detect-changes.outputs.backend }}" != "true" ]] && echo "- Backend omitted" >> "$GITHUB_STEP_SUMMARY"
+          [[ "${{ needs.detect-changes.outputs.infra }}" != "true" ]] && echo "- Infra omitted" >> "$GITHUB_STEP_SUMMARY"
