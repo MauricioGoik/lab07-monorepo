@@ -13,6 +13,7 @@ on:
       - 'infra/**'
       - 'docs/**'
       - '.github/workflows/**'
+
   pull_request:
     branches:
       - main
@@ -25,7 +26,8 @@ on:
       - 'docs/**'
       - '.github/workflows/**'
 
-permissions: read-all
+permissions:
+  contents: read
 
 jobs:
   detect-changes:
@@ -35,8 +37,10 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
       infra: ${{ steps.filter.outputs.infra }}
+      docs: ${{ steps.filter.outputs.docs }}
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       affected: ${{ steps.affected.outputs.affected }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,8 +63,10 @@ jobs:
 
       - name: Detect docs only
         id: docs_only
+        shell: bash
         run: |
-          if [[ "${{ steps.filter.outputs.frontend }}" == "false" && \
+          if [[ "${{ steps.filter.outputs.docs }}" == "true" && \
+                "${{ steps.filter.outputs.frontend }}" == "false" && \
                 "${{ steps.filter.outputs.backend }}" == "false" && \
                 "${{ steps.filter.outputs.infra }}" == "false" ]]; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
@@ -70,13 +76,24 @@ jobs:
 
       - name: Build affected list
         id: affected
+        shell: bash
         run: |
           affected=""
-          [[ "${{ steps.filter.outputs.frontend }}" == "true" ]] && affected="${affected} frontend"
-          [[ "${{ steps.filter.outputs.backend }}" == "true" ]] && affected="${affected} backend"
-          [[ "${{ steps.filter.outputs.infra }}" == "true" ]] && affected="${affected} infra"
-          [[ -z "$affected" && "${{ steps.docs_only.outputs.docs_only }}" == "true" ]] && affected="docs"
-          echo "affected=${affected}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ steps.filter.outputs.frontend }}" == "true" ]]; then
+            affected="${affected} frontend"
+          fi
+          if [[ "${{ steps.filter.outputs.backend }}" == "true" ]]; then
+            affected="${affected} backend"
+          fi
+          if [[ "${{ steps.filter.outputs.infra }}" == "true" ]]; then
+            affected="${affected} infra"
+          fi
+          if [[ "${{ steps.filter.outputs.docs }}" == "true" ]]; then
+            affected="${affected} docs"
+          fi
+
+          affected="$(echo "$affected" | xargs)"
+          echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
   frontend:
     name: Frontend pipeline
@@ -120,16 +137,22 @@ jobs:
     if: needs.detect-changes.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Docs notice
-        run: echo "Documentation-only change detected"
+      - name: Documentation-only change detected
+        run: echo "Only documentation changed"
 
   summary:
     name: Final summary
-    needs: [detect-changes, frontend, backend, infra, docs-report]
+    needs:
+      - detect-changes
+      - frontend
+      - backend
+      - infra
+      - docs-report
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Generate report
+        shell: bash
         run: |
           echo "## Monorepo report" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -137,9 +160,22 @@ jobs:
           echo "- Frontend pipeline executed: ${{ needs.detect-changes.outputs.frontend }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Backend pipeline executed: ${{ needs.detect-changes.outputs.backend }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Infra pipeline executed: ${{ needs.detect-changes.outputs.infra }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Docs only change: ${{ needs.detect-changes.outputs.docs_only }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Docs pipeline executed: ${{ needs.detect-changes.outputs.docs_only }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Omitted jobs" >> "$GITHUB_STEP_SUMMARY"
-          [[ "${{ needs.detect-changes.outputs.frontend }}" != "true" ]] && echo "- Frontend omitted" >> "$GITHUB_STEP_SUMMARY"
-          [[ "${{ needs.detect-changes.outputs.backend }}" != "true" ]] && echo "- Backend omitted" >> "$GITHUB_STEP_SUMMARY"
-          [[ "${{ needs.detect-changes.outputs.infra }}" != "true" ]] && echo "- Infra omitted" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ needs.detect-changes.outputs.frontend }}" != "true" ]]; then
+            echo "- Frontend omitted" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.detect-changes.outputs.backend }}" != "true" ]]; then
+            echo "- Backend omitted" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.detect-changes.outputs.infra }}" != "true" ]]; then
+            echo "- Infra omitted" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ "${{ needs.detect-changes.outputs.docs_only }}" != "true" ]]; then
+            echo "- Docs-only job omitted" >> "$GITHUB_STEP_SUMMARY"
+          fi
